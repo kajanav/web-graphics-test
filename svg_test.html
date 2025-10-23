@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ta">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Chart Performance Test - D3.js</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        #chart-container {
+            width: 750px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        svg {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        
+        #metrics {
+            width: 90%;
+            margin: 20px auto;
+            text-align: left;
+        }
+        
+        #metrics table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        #metrics th,
+        #metrics td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: center;
+        }
+        
+        #metrics th {
+            background-color: #eee;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="chart-container">
+        <h2>Performance Test - SVG Bar Chart (D3.js)</h2>
+        <svg width="700" height="400"></svg>
+    </div>
+
+    <div id="metrics">
+        <h3>Rendering Metrics</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rendering Tech</th>
+                    <th>Test Type</th>
+                    <th>Bandwidth</th>
+                    <th>Avg. Rendering Time (ms)</th>
+                    <th>FPS</th>
+                    <th>CPU (%)</th>
+                    <th>Memory (MB)</th>
+                </tr>
+            </thead>
+            <tbody id="metrics-body">
+                <!-- Metrics will appear here -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const svg = d3.select("svg");
+        const width = +svg.attr("width");
+        const height = +svg.attr("height");
+
+        // 1000 random bars
+        const data = Array.from({
+            length: 1000
+        }, () => Math.random() * 100);
+
+        const xScale = d3.scaleBand()
+            .domain(d3.range(data.length))
+            .range([0, width])
+            .padding(0.02);
+
+        const yScale = d3.scaleLinear()
+            .domain([0, d3.max(data)])
+            .range([height, 0]);
+
+        const metricsBody = document.getElementById("metrics-body");
+
+        // Simulate network bandwidth delay (ms per batch)
+        const bandwidthSimulation = {
+            "Normal": 0,
+            "Slow 3G": 100,
+            "Fast 3G": 30
+        };
+
+        function runTest(batchSize, testType, bandwidthType) {
+            svg.selectAll("*").remove(); // clear previous chart
+            let index = 0;
+            const startTime = performance.now();
+            let frameTimes = [];
+            let lastFrameTime = startTime;
+
+            function renderBatch() {
+                const batch = data.slice(index, index + batchSize);
+
+                svg.selectAll(null)
+                    .data(batch, (d, i) => index + i)
+                    .enter()
+                    .append("rect")
+                    .attr("x", (d, i) => xScale(index + i))
+                    .attr("y", d => yScale(d))
+                    .attr("width", xScale.bandwidth())
+                    .attr("height", d => height - yScale(d))
+                    .attr("fill", "steelblue");
+
+                const batchEnd = performance.now();
+                frameTimes.push(batchEnd - lastFrameTime);
+                lastFrameTime = batchEnd;
+
+                index += batchSize;
+
+                if (index < data.length) {
+                    setTimeout(() => requestAnimationFrame(renderBatch), bandwidthSimulation[bandwidthType]);
+                } else {
+                    const endTime = performance.now();
+                    const totalRenderTime = endTime - startTime;
+
+                    const avgFrameTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+                    const avgFPS = (1000 / avgFrameTime).toFixed(1);
+
+                    const cpuPercent = ((totalRenderTime / totalRenderTime) * 100).toFixed(1);
+                    let usedMemory = "N/A";
+                    if (performance.memory) {
+                        usedMemory = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
+                    }
+
+                    // Append row to table
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td>SVG (D3.js)</td>
+                        <td>${testType}</td>
+                        <td>${bandwidthType}</td>
+                        <td>${totalRenderTime.toFixed(2)}</td>
+                        <td>${avgFPS}</td>
+                        <td>${cpuPercent}</td>
+                        <td>${usedMemory}</td>
+                    `;
+                    metricsBody.appendChild(row);
+                }
+            }
+
+            renderBatch();
+        }
+
+        // Run tests: Baseline and Optimized under different bandwidths
+        const tests = [{
+            batch: 50,
+            type: "Baseline",
+            bw: "Normal"
+        }, {
+            batch: 50,
+            type: "Baseline",
+            bw: "Slow 3G"
+        }, {
+            batch: 50,
+            type: "Baseline",
+            bw: "Fast 3G"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Normal"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Slow 3G"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Fast 3G"
+        }];
+
+        let delay = 0;
+        tests.forEach(test => {
+            setTimeout(() => runTest(test.batch, test.type, test.bw), delay);
+            delay += 4000; // wait 4s between tests
+        });
+    </script>
+
+</body>
+
+</html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas Chart Performance Test - Chart.js</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            text-align: center;
+            margin: 20px;
+        }
+        
+        #chart-container {
+            width: 750px;
+            margin: 20px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        canvas {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        table {
+            margin: 20px auto;
+            border-collapse: collapse;
+            width: 90%;
+        }
+        
+        table,
+        th,
+        td {
+            border: 1px solid #ccc;
+        }
+        
+        th,
+        td {
+            padding: 8px 12px;
+            text-align: center;
+        }
+        
+        th {
+            background: #f0f0f0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Canvas (Chart.js) Performance Test</h1>
+
+    <div id="chart-container">
+        <h2>Line Chart</h2>
+        <canvas id="myChart" width="700" height="400"></canvas>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Rendering Tech</th>
+                <th>Test Type</th>
+                <th>Bandwidth</th>
+                <th>Batch Size</th>
+                <th>Avg. Rendering Time (ms)</th>
+                <th>FPS</th>
+                <th>CPU (%)</th>
+                <th>Memory (MB)</th>
+            </tr>
+        </thead>
+        <tbody id="metrics-body"></tbody>
+    </table>
+
+    <script>
+        const bandwidthSimulation = {
+            "Normal": 0,
+            "Slow 3G": 100,
+            "Fast 3G": 30
+        };
+
+        const tests = [{
+            batch: 50,
+            type: "Baseline",
+            bw: "Normal"
+        }, {
+            batch: 50,
+            type: "Baseline",
+            bw: "Slow 3G"
+        }, {
+            batch: 50,
+            type: "Baseline",
+            bw: "Fast 3G"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Normal"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Slow 3G"
+        }, {
+            batch: 200,
+            type: "Optimized",
+            bw: "Fast 3G"
+        }];
+
+        let currentTest = 0;
+        let chart = null;
+
+        function getMemoryMB() {
+            if (performance.memory) return (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
+            return "N/A";
+        }
+
+        function runNextTest() {
+            if (currentTest >= tests.length) return;
+
+            const test = tests[currentTest];
+            const canvas = document.getElementById('myChart');
+            const ctx = canvas.getContext('2d');
+
+            // Destroy previous chart
+            if (chart) chart.destroy();
+
+            // Generate random data
+            const N = test.batch;
+            const labels = Array.from({
+                length: N
+            }, (_, i) => 'P' + i);
+            const data1 = Array.from({
+                length: N
+            }, () => Math.random() * 100);
+            const data2 = Array.from({
+                length: N
+            }, () => Math.random() * 100);
+
+            const delay = bandwidthSimulation[test.bw];
+            const startTime = performance.now();
+
+            setTimeout(() => {
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Dataset 1',
+                            data: data1,
+                            borderColor: 'rgba(54,162,235,1)',
+                            borderWidth: 1,
+                            pointRadius: 0
+                        }, {
+                            label: 'Dataset 2',
+                            data: data2,
+                            borderColor: 'rgba(255,99,132,1)',
+                            borderWidth: 1,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: false,
+                        animation: false
+                    }
+                });
+
+                const endTime = performance.now();
+                const renderTime = endTime - startTime;
+                const fps = (1000 / renderTime).toFixed(1);
+                const cpuPercent = (renderTime / renderTime * 100).toFixed(1); // placeholder
+                const memory = getMemoryMB();
+
+                const metricsBody = document.getElementById("metrics-body");
+                const row = document.createElement("tr");
+                row.innerHTML = `
+            <td>Canvas (Chart.js)</td>
+            <td>${test.type}</td>
+            <td>${test.bw}</td>
+            <td>${test.batch}</td>
+            <td>${renderTime.toFixed(2)}</td>
+            <td>${fps}</td>
+            <td>${cpuPercent}</td>
+            <td>${memory}</td>
+        `;
+                metricsBody.appendChild(row);
+
+                currentTest++;
+                runNextTest();
+            }, delay);
+        }
+
+        window.onload = runNextTest;
+    </script>
+
+</body>
+
+</html>
