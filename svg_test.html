@@ -2,8 +2,8 @@
 <html lang="ta">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SVG Chart Performance Test - D3.js</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
@@ -11,26 +11,29 @@
             font-family: Arial, sans-serif;
             background-color: #f4f4f4;
             text-align: center;
-            margin-top: 20px;
+            margin: 20px;
         }
         
         #chart-container {
-            width: 750px;
+            width: 760px;
             margin: 0 auto;
             background: #fff;
-            padding: 20px;
+            padding: 18px;
             border-radius: 12px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
         }
         
         svg {
             border: 1px solid #ddd;
             border-radius: 8px;
+            display: block;
+            margin: 0 auto;
+            background: #fff;
         }
         
         #metrics {
-            width: 90%;
-            margin: 20px auto;
+            width: 760px;
+            margin: 18px auto;
             text-align: left;
         }
         
@@ -44,19 +47,65 @@
             border: 1px solid #ccc;
             padding: 8px;
             text-align: center;
+            font-size: 13px;
         }
         
         #metrics th {
             background-color: #eee;
         }
+        
+        #controls {
+            width: 760px;
+            margin: 8px auto 24px;
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        button {
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            background: #2b8cff;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .note {
+            font-size: 13px;
+            color: #444;
+        }
     </style>
 </head>
 
 <body>
-
     <div id="chart-container">
         <h2>Performance Test - SVG Bar Chart (D3.js)</h2>
-        <svg width="700" height="400"></svg>
+        <svg width="700" height="400" id="chart-svg"></svg>
+    </div>
+
+    <div id="controls">
+        <div>
+            <label class="note">Dataset size:</label>
+            <select id="dataset-size">
+        <option value="1000" selected>1000 bars</option>
+        <option value="2000">2000 bars</option>
+        <option value="500">500 bars</option>
+      </select> &nbsp;&nbsp;
+            <label class="note">Repeats:</label>
+            <select id="repeats">
+        <option value="3">3</option>
+        <option value="5" selected>5</option>
+        <option value="10">10</option>
+      </select>
+        </div>
+
+        <div>
+            <button id="start-btn">Start Tests</button>
+            <button id="download-btn" disabled>Download Results (JSON)</button>
+        </div>
     </div>
 
     <div id="metrics">
@@ -67,139 +116,265 @@
                     <th>Rendering Tech</th>
                     <th>Test Type</th>
                     <th>Bandwidth</th>
-                    <th>Avg. Rendering Time (ms)</th>
-                    <th>FPS</th>
-                    <th>CPU (%)</th>
-                    <th>Memory (MB)</th>
+                    <th>Elements</th>
+                    <th>Avg. Render Time (ms)</th>
+                    <th>Avg Batch Time (ms)</th>
+                    <th>Approx FPS</th>
+                    <th>Used JS Heap (MB)</th>
                 </tr>
             </thead>
-            <tbody id="metrics-body">
-                <!-- Metrics will appear here -->
-            </tbody>
+            <tbody id="metrics-body"></tbody>
         </table>
+        <p class="note">Notes: "Avg. Render Time" is wall-clock JS render time (excludes simulated network delay). "Approx FPS" is an approximate derived value based on batch render times. CPU% is not reported because client-side JS cannot reliably measure system CPU
+            usage.</p>
     </div>
 
     <script>
-        const svg = d3.select("svg");
+        // Get DOM references
+        const svg = d3.select("#chart-svg");
         const width = +svg.attr("width");
         const height = +svg.attr("height");
-
-        // 1000 random bars
-        const data = Array.from({
-            length: 1000
-        }, () => Math.random() * 100);
-
-        const xScale = d3.scaleBand()
-            .domain(d3.range(data.length))
-            .range([0, width])
-            .padding(0.02);
-
-        const yScale = d3.scaleLinear()
-            .domain([0, d3.max(data)])
-            .range([height, 0]);
-
         const metricsBody = document.getElementById("metrics-body");
+        const startBtn = document.getElementById("start-btn");
+        const downloadBtn = document.getElementById("download-btn");
+        const datasetSizeSelect = document.getElementById("dataset-size");
+        const repeatsSelect = document.getElementById("repeats");
 
-        // Simulate network bandwidth delay (ms per batch)
+        // Bandwidth simulation delays (ms between batches)
         const bandwidthSimulation = {
             "Normal": 0,
             "Slow 3G": 100,
             "Fast 3G": 30
         };
 
-        function runTest(batchSize, testType, bandwidthType) {
-            svg.selectAll("*").remove(); // clear previous chart
-            let index = 0;
+        // default tests (batch sizes chosen to simulate fewer/more batches)
+        function buildTests(batchSets) {
+            // batchSets is an array of objects { batch, label }
+            const bwKeys = Object.keys(bandwidthSimulation);
+            const tests = [];
+            for (const bs of batchSets) {
+                for (const bw of bwKeys) {
+                    tests.push({
+                        batch: bs.batch,
+                        type: bs.label,
+                        bw
+                    });
+                }
+            }
+            return tests;
+        }
+
+        // Helper: generate dataset
+        function generateData(n) {
+            return Array.from({
+                length: n
+            }, () => Math.random() * 100);
+        }
+
+        // Scales (we'll update domain as dataset changes)
+        let xScale = d3.scaleBand().range([0, width]).padding(0.02);
+        let yScale = d3.scaleLinear().range([height, 0]);
+
+        // Render a batch into SVG using D3 data join with stable keys
+        function renderBatchToSVG(batchData, baseIndex) {
+            // Bind to a slice of the global data, but keys include the absolute index for stability
+            const sel = svg.selectAll("rect")
+                .data(batchData, (d, i) => baseIndex + i);
+
+            // Enter selection
+            sel.enter()
+                .append("rect")
+                .attr("x", (d, i) => xScale(baseIndex + i))
+                .attr("y", d => yScale(d))
+                .attr("width", xScale.bandwidth())
+                .attr("height", d => height - yScale(d))
+                .attr("fill", "steelblue");
+
+            // No update/exit logic needed for this experiment (we always append new)
+            return Promise.resolve();
+        }
+
+        // runTest returns an object of metrics after finishing
+        async function runTest({
+            data,
+            batchSize,
+            testType,
+            bandwidthType
+        }) {
+            svg.selectAll("*").remove();
+            // update scales
+            xScale.domain(d3.range(data.length)).range([0, width]);
+            yScale.domain([0, d3.max(data)]).range([height, 0]);
+
+            const frameTimes = [];
             const startTime = performance.now();
-            let frameTimes = [];
-            let lastFrameTime = startTime;
+            let index = 0;
 
-            function renderBatch() {
+            // Measure Time-to-First-Meaningful-Render (first batch complete)
+            let ttfmr = null;
+
+            while (index < data.length) {
                 const batch = data.slice(index, index + batchSize);
-
-                svg.selectAll(null)
-                    .data(batch, (d, i) => index + i)
-                    .enter()
-                    .append("rect")
-                    .attr("x", (d, i) => xScale(index + i))
-                    .attr("y", d => yScale(d))
-                    .attr("width", xScale.bandwidth())
-                    .attr("height", d => height - yScale(d))
-                    .attr("fill", "steelblue");
-
+                const batchStart = performance.now();
+                await renderBatchToSVG(batch, index);
                 const batchEnd = performance.now();
-                frameTimes.push(batchEnd - lastFrameTime);
-                lastFrameTime = batchEnd;
+
+                frameTimes.push(batchEnd - batchStart);
+                if (ttfmr === null) {
+                    ttfmr = batchEnd - startTime;
+                }
 
                 index += batchSize;
 
+                // If there are more batches, simulate bandwidth delay and yield to RAF
                 if (index < data.length) {
-                    setTimeout(() => requestAnimationFrame(renderBatch), bandwidthSimulation[bandwidthType]);
-                } else {
-                    const endTime = performance.now();
-                    const totalRenderTime = endTime - startTime;
-
-                    const avgFrameTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
-                    const avgFPS = (1000 / avgFrameTime).toFixed(1);
-
-                    const cpuPercent = ((totalRenderTime / totalRenderTime) * 100).toFixed(1);
-                    let usedMemory = "N/A";
-                    if (performance.memory) {
-                        usedMemory = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
-                    }
-
-                    // Append row to table
-                    const row = document.createElement("tr");
-                    row.innerHTML = `
-                        <td>SVG (D3.js)</td>
-                        <td>${testType}</td>
-                        <td>${bandwidthType}</td>
-                        <td>${totalRenderTime.toFixed(2)}</td>
-                        <td>${avgFPS}</td>
-                        <td>${cpuPercent}</td>
-                        <td>${usedMemory}</td>
-                    `;
-                    metricsBody.appendChild(row);
+                    await new Promise(r => setTimeout(r, bandwidthSimulation[bandwidthType]));
+                    await new Promise(r => requestAnimationFrame(r));
                 }
             }
 
-            renderBatch();
+            const endTime = performance.now();
+            const totalRenderTime = endTime - startTime; // JS render time (excludes simulated network waits)
+            const avgBatchTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+            const approxFPS = avgBatchTime > 0 ? (1000 / avgBatchTime) : NaN;
+
+            let usedJSHeapMB = "N/A";
+            if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+                usedJSHeapMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
+            }
+
+            return {
+                tech: "SVG (D3.js)",
+                testType,
+                bandwidthType,
+                elements: data.length,
+                totalRenderTime: Number(totalRenderTime.toFixed(2)),
+                avgBatchTime: Number(avgBatchTime.toFixed(2)),
+                approxFPS: Number(approxFPS.toFixed(1)),
+                usedJSHeapMB,
+                ttfmr: ttfmr !== null ? Number(ttfmr.toFixed(2)) : null
+            };
         }
 
-        // Run tests: Baseline and Optimized under different bandwidths
-        const tests = [{
-            batch: 50,
-            type: "Baseline",
-            bw: "Normal"
-        }, {
-            batch: 50,
-            type: "Baseline",
-            bw: "Slow 3G"
-        }, {
-            batch: 50,
-            type: "Baseline",
-            bw: "Fast 3G"
-        }, {
-            batch: 200,
-            type: "Optimized",
-            bw: "Normal"
-        }, {
-            batch: 200,
-            type: "Optimized",
-            bw: "Slow 3G"
-        }, {
-            batch: 200,
-            type: "Optimized",
-            bw: "Fast 3G"
-        }];
+        // Sequentially run test suite and record aggregated metrics (repeat runs)
+        async function runAllTestsSequentially(tests, data, repeats) {
+            const results = [];
+            for (const test of tests) {
+                // For each test, repeat 'repeats' times and compute averages
+                const singleTestRuns = [];
+                for (let r = 0; r < repeats; r++) {
+                    // Choose test batch size and label
+                    const runResult = await runTest({
+                        data,
+                        batchSize: test.batch,
+                        testType: test.type,
+                        bandwidthType: test.bw
+                    });
+                    singleTestRuns.push(runResult);
+                    // short pause to allow GC and UI settle
+                    await new Promise(res => setTimeout(res, 400));
+                }
+                // Aggregate averages for that test
+                const agg = aggregateRuns(singleTestRuns);
+                results.push(agg);
+                appendResultRow(agg);
+                // small pause between different test variants
+                await new Promise(res => setTimeout(res, 600));
+            }
+            return results;
+        }
 
-        let delay = 0;
-        tests.forEach(test => {
-            setTimeout(() => runTest(test.batch, test.type, test.bw), delay);
-            delay += 4000; // wait 4s between tests
+        // Aggregate multiple runs: means for numeric metrics
+        function aggregateRuns(runs) {
+            const n = runs.length;
+            const sum = (key) => runs.reduce((acc, r) => acc + Number(r[key]), 0);
+            const example = runs[0];
+            return {
+                tech: example.tech,
+                testType: example.testType,
+                bandwidthType: example.bandwidthType,
+                elements: example.elements,
+                avgRenderTime: Number((sum('totalRenderTime') / n).toFixed(2)),
+                avgBatchTime: Number((sum('avgBatchTime') / n).toFixed(2)),
+                avgApproxFPS: Number((sum('approxFPS') / n).toFixed(1)),
+                avgUsedJSHeapMB: (runs.every(r => r.usedJSHeapMB !== "N/A") ? Number((sum('usedJSHeapMB') / n).toFixed(2)) : "N/A"),
+                rawRuns: runs
+            };
+        }
+
+        // Append one aggregated row to the table
+        function appendResultRow(agg) {
+            const row = document.createElement("tr");
+            row.innerHTML = `
+        <td>${agg.tech}</td>
+        <td>${agg.testType}</td>
+        <td>${agg.bandwidthType}</td>
+        <td>${agg.elements}</td>
+        <td>${agg.avgRenderTime}</td>
+        <td>${agg.avgBatchTime}</td>
+        <td>${agg.avgApproxFPS}</td>
+        <td>${agg.avgUsedJSHeapMB}</td>
+      `;
+            metricsBody.appendChild(row);
+        }
+
+        // Download helper
+        function downloadJSON(data, filename = 'svg-test-results.json') {
+            const blob = new Blob([JSON.stringify(data, null, 2)], {
+                type: "application/json"
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        // Main "Start Tests" click handler
+        startBtn.addEventListener("click", async() => {
+            // disable buttons while running
+            startBtn.disabled = true;
+            downloadBtn.disabled = true;
+            metricsBody.innerHTML = ""; // clear previous rows
+
+            const datasetSize = Number(datasetSizeSelect.value);
+            const repeats = Number(repeatsSelect.value);
+            const data = generateData(datasetSize);
+
+            // Choose "baseline" and "optimized" batch sets (you can modify as experiment design)
+            const batchSets = [{
+                batch: Math.max(1, Math.floor(datasetSize / 20)),
+                label: "Baseline (smaller batches)"
+            }, {
+                batch: Math.max(1, Math.floor(datasetSize / 5)),
+                label: "Optimized (larger batches)"
+            }];
+            const tests = buildTests(batchSets);
+
+            // Run tests sequentially and collect final results
+            const allResults = await runAllTestsSequentially(tests, data, repeats);
+
+            // Re-enable download and start buttons
+            downloadBtn.disabled = false;
+            startBtn.disabled = false;
+
+            // Store results for download
+            startBtn.results = allResults;
+            console.log("All results:", allResults);
         });
-    </script>
 
+        downloadBtn.addEventListener("click", () => {
+            if (startBtn.results) {
+                downloadJSON(startBtn.results, 'svg-performance-results.json');
+            }
+        });
+
+        // Optional: auto-run when the page loads (uncomment to enable)
+        // window.addEventListener('load', () => startBtn.click());
+    </script>
 </body>
 
 </html>

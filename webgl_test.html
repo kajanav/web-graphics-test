@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WebGL (Three.js) Performance Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            background: #fafafa;
+            margin: 18px;
+            text-align: center;
+        }
+        
+        #canvas-wrap {
+            width: 820px;
+            margin: 12px auto;
+            background: #fff;
+            padding: 12px;
+            border-radius: 10px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+        }
+        
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 6px;
+            border: 1px solid #eee;
+        }
+        
+        #controls {
+            width: 820px;
+            margin: 10px auto 18px;
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        select,
+        input[type=number] {
+            padding: 6px;
+            border-radius: 6px;
+            border: 1px solid #ccc
+        }
+        
+        button {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: none;
+            background: #198754;
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer
+        }
+        
+        table {
+            width: 95%;
+            margin: 12px auto;
+            border-collapse: collapse;
+        }
+        
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+            font-size: 13px
+        }
+        
+        th {
+            background: #f1f1f1
+        }
+        
+        .note {
+            font-size: 12px;
+            color: #555
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebGL (Three.js) Performance Test</h1>
+
+    <div id="canvas-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <strong>Instanced Mesh Scene</strong>
+            <span class="note">Use "Visible Duration" to keep the final scene visible between runs.</span>
+        </div>
+        <div id="renderer-container"></div>
+    </div>
+
+    <div id="controls">
+        <div style="display:flex;gap:10px;align-items:center">
+            <label>Objects:</label>
+            <select id="objects-count">
+        <option value="500">500</option>
+        <option value="1000" selected>1000</option>
+        <option value="5000">5000</option>
+        <option value="10000">10000</option>
+      </select>
+
+            <label>Repeats:</label>
+            <select id="repeats"><option>3</option><option selected>5</option><option>10</option></select>
+
+            <label>Visible Duration (ms):</label>
+            <input id="visible-duration" type="number" value="300" min="50" style="width:90px;">
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center">
+            <button id="start-btn">Start Tests</button>
+            <button id="download-btn" disabled>Download Results</button>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Tech</th>
+                <th>Test</th>
+                <th>Bandwidth</th>
+                <th>Objects</th>
+                <th>Avg Wall Time (ms)</th>
+                <th>Avg Batch Render (ms)</th>
+                <th>fpsProxy</th>
+                <th>Used JS Heap (MB)</th>
+            </tr>
+        </thead>
+        <tbody id="metrics-body"></tbody>
+    </table>
+
+    <p class="note">Notes: "Batch Render" measures time for the render call after adding each batch. GPUs/Shader times and system CPU% are not exposed to browser JS and are therefore not reported.</p>
+
+    <script>
+        /* ====== Config & helpers ====== */
+        const bandwidthSimulation = {
+            "Normal": 0,
+            "Fast 3G": 30,
+            "Slow 3G": 100
+        };
+        const testVariants = [{
+            batch: 50,
+            label: "Baseline (small batches)"
+        }, {
+            batch: 200,
+            label: "Optimized (large batches)"
+        }];
+
+        const container = document.getElementById('renderer-container');
+        const objectsCountSelect = document.getElementById('objects-count');
+        const repeatsSelect = document.getElementById('repeats');
+        const visibleDurationInput = document.getElementById('visible-duration');
+        const startBtn = document.getElementById('start-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const metricsBody = document.getElementById('metrics-body');
+
+        let renderer, scene, camera;
+        let instancedMesh = null;
+        let positions = []; // store precomputed positions for instances
+
+        // Basic Three.js init (we will reuse renderer across tests)
+        function initThree(width = 800, height = 450) {
+            // cleanup old renderer if any
+            if (renderer) {
+                renderer.dispose();
+                container.innerHTML = '';
+                renderer = null;
+                scene = null;
+                camera = null;
+            }
+
+            renderer = new THREE.WebGLRenderer({
+                antialias: true
+            });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            container.appendChild(renderer.domElement);
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+
+            camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 2000);
+            camera.position.set(0, 150, 250);
+            camera.lookAt(0, 0, 0);
+
+            const light = new THREE.DirectionalLight(0xffffff, 0.9);
+            light.position.set(0.6, 1, 0.8).normalize();
+            scene.add(light);
+            const ambient = new THREE.AmbientLight(0x404040, 0.9);
+            scene.add(ambient);
+        }
+
+        // Precompute simple random positions in a box for N objects
+        function buildPositions(N) {
+            positions = new Array(N);
+            const spread = 160;
+            for (let i = 0; i < N; i++) {
+                positions[i] = {
+                    x: (Math.random() - 0.5) * spread,
+                    y: (Math.random() - 0.5) * spread * 0.6,
+                    z: (Math.random() - 0.5) * spread
+                };
+            }
+        }
+
+        // Create an InstancedMesh prepared to receive N instances, but set mesh.count = 0 initially
+        function createInstancedMesh(N) {
+            // small box geometry & simple material
+            const geom = new THREE.BoxGeometry(2.6, 2.6, 2.6);
+            const mat = new THREE.MeshStandardMaterial({
+                color: 0x2b8cff,
+                roughness: 0.6,
+                metalness: 0.1
+            });
+            // create instanced mesh with N capacity
+            const mesh = new THREE.InstancedMesh(geom, mat, N);
+            mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            mesh.count = 0; // no instances rendered initially
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            return mesh;
+        }
+
+        // Set transform matrix for one instance index
+        function setInstanceMatrix(mesh, idx, pos) {
+            const m = new THREE.Matrix4();
+            const s = new THREE.Vector3(1, 1, 1);
+            const r = new THREE.Quaternion();
+            const p = new THREE.Vector3(pos.x, pos.y, pos.z);
+            m.compose(p, r, s);
+            mesh.setMatrixAt(idx, m);
+        }
+
+        // Render helper that calls renderer.render and returns how long it took (ms)
+        function renderOnce() {
+            const t0 = performance.now();
+            renderer.render(scene, camera);
+            const t1 = performance.now();
+            return t1 - t0;
+        }
+
+        // Gather memory if available
+        function getMemoryMB() {
+            if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+                return (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
+            }
+            return "N/A";
+        }
+
+        /* ====== Main test logic: add instances in batches, measure times ====== */
+
+        // run one test with given params and return measurement object
+        async function runTest({
+            totalObjects,
+            batchSize,
+            bandwidthKey
+        }) {
+            // (re)initialize scene & positions
+            initThree();
+            buildPositions(totalObjects);
+
+            // create instanced mesh and add to scene
+            instancedMesh = createInstancedMesh(totalObjects);
+            scene.add(instancedMesh);
+
+            let index = 0;
+            const batchTimes = [];
+            const startWall = performance.now();
+
+            while (index < totalObjects) {
+                // add next batch matrices
+                const limit = Math.min(index + batchSize, totalObjects);
+                for (let i = index; i < limit; i++) {
+                    setInstanceMatrix(instancedMesh, i, positions[i]);
+                }
+                // update the count so renderer draws newly added instances
+                instancedMesh.count = limit;
+
+                // force update of instanceMatrix to be sent to GPU when needed
+                instancedMesh.instanceMatrix.needsUpdate = true;
+
+                // render and measure time for this batch render
+                // wait one RAF tick to ensure DOM/GL state stable
+                await new Promise(r => requestAnimationFrame(r));
+                const renderTime = renderOnce();
+                batchTimes.push(renderTime);
+
+                index = limit;
+
+                // if there are more batches simulate bandwidth delay
+                if (index < totalObjects) {
+                    await new Promise(r => setTimeout(r, bandwidthSimulation[bandwidthKey]));
+                }
+            }
+
+            // keep final scene painted at least one RAF
+            await new Promise(r => requestAnimationFrame(r));
+            const endWall = performance.now();
+
+            const totalWall = endWall - startWall;
+            const avgBatchRender = batchTimes.reduce((a, b) => a + b, 0) / batchTimes.length;
+            const fpsProxy = avgBatchRender > 0 ? (1000 / avgBatchRender) : NaN;
+            const usedHeapMB = getMemoryMB();
+
+            return {
+                tech: "WebGL (Three.js - InstancedMesh)",
+                testLabel: `batch ${batchSize}`,
+                bandwidth: bandwidthKey,
+                objects: totalObjects,
+                avgWallTime: Number(totalWall.toFixed(2)),
+                avgBatchRender: Number(avgBatchRender.toFixed(2)),
+                fpsProxy: Number(fpsProxy.toFixed(1)),
+                usedHeapMB
+            };
+        }
+
+        // Run each variant multiple times and aggregate averages
+        async function runAllVariantsSequentially(totalObjects, repeats, visibleDuration) {
+            const results = [];
+            for (const v of testVariants) {
+                for (const bw of Object.keys(bandwidthSimulation)) {
+                    // repeat runs
+                    const runs = [];
+                    for (let r = 0; r < repeats; r++) {
+                        // short settle
+                        await new Promise(res => setTimeout(res, 200));
+                        const resObj = await runTest({
+                            totalObjects,
+                            batchSize: v.batch,
+                            bandwidthKey: bw
+                        });
+                        runs.push(resObj);
+                        // visible pause to let user visually confirm
+                        await new Promise(res => setTimeout(res, visibleDuration));
+                    }
+                    // aggregate
+                    const n = runs.length;
+                    const sum = (k) => runs.reduce((acc, it) => acc + Number(it[k]), 0);
+                    const agg = {
+                        tech: runs[0].tech,
+                        testLabel: v.label,
+                        bandwidth: bw,
+                        objects: totalObjects,
+                        avgWallTime: Number((sum('avgWallTime') / n).toFixed(2)),
+                        avgBatchRender: Number((sum('avgBatchRender') / n).toFixed(2)),
+                        avgFpsProxy: Number((sum('fpsProxy') / n).toFixed(1)),
+                        avgUsedHeapMB: runs.every(x => x.usedHeapMB !== "N/A") ? Number((sum('usedHeapMB') / n).toFixed(2)) : "N/A",
+                        rawRuns: runs
+                    };
+                    results.push(agg);
+                    // append to UI table
+                    appendResultRow(agg);
+                    // small pause to avoid thermal bias
+                    await new Promise(res => setTimeout(res, 400));
+                }
+            }
+            return results;
+        }
+
+        /* ====== UI helpers ====== */
+        function appendResultRow(agg) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+    <td>${agg.tech}</td>
+    <td>${agg.testLabel}</td>
+    <td>${agg.bandwidth}</td>
+    <td>${agg.objects}</td>
+    <td>${agg.avgWallTime}</td>
+    <td>${agg.avgBatchRender}</td>
+    <td>${agg.avgFpsProxy}</td>
+    <td>${agg.avgUsedHeapMB}</td>
+  `;
+            metricsBody.appendChild(tr);
+        }
+
+        /* ====== Wiring to UI ====== */
+        startBtn.addEventListener('click', async() => {
+            startBtn.disabled = true;
+            downloadBtn.disabled = true;
+            metricsBody.innerHTML = '';
+            let results = [];
+
+            const totalObjects = Number(objectsCountSelect.value);
+            const repeats = Number(repeatsSelect.value);
+            const visibleDuration = Number(visibleDurationInput.value);
+
+            // run tests
+            results = await runAllVariantsSequentially(totalObjects, repeats, visibleDuration);
+
+            // allow download
+            downloadBtn.disabled = false;
+            startBtn.disabled = false;
+            startBtn.results = results;
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (!startBtn.results) return;
+            const blob = new Blob([JSON.stringify(startBtn.results, null, 2)], {
+                type: 'application/json'
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'webgl-test-results.json';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        });
+
+        // Initialize minimal renderer on load so user sees blank canvas
+        initThree();
+        renderer.render(scene, camera);
+    </script>
+</body>
+
+</html>

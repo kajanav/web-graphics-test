@@ -2,25 +2,25 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Canvas Chart Performance Test - Chart.js</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Canvas (Chart.js) Performance Test — Visible Charts</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: Arial, Helvetica, sans-serif;
             background: #f5f5f5;
-            text-align: center;
             margin: 20px;
+            text-align: center;
         }
         
         #chart-container {
-            width: 750px;
-            margin: 20px auto;
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            width: 760px;
+            margin: 12px auto;
+            background: #fff;
+            padding: 16px;
+            border-radius: 10px;
+            box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06);
         }
         
         canvas {
@@ -28,176 +28,364 @@
             border-radius: 8px;
             display: block;
             margin: 0 auto;
+            background: #fff;
         }
         
         table {
-            margin: 20px auto;
+            margin: 18px auto;
             border-collapse: collapse;
-            width: 90%;
+            width: 95%;
         }
         
-        table,
         th,
         td {
             border: 1px solid #ccc;
-        }
-        
-        th,
-        td {
-            padding: 8px 12px;
+            padding: 8px;
             text-align: center;
+            font-size: 13px;
         }
         
         th {
-            background: #f0f0f0;
+            background: #efefef;
+        }
+        
+        #controls {
+            width: 760px;
+            margin: 8px auto 18px;
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: none;
+            background: #2b8cff;
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        
+        .note {
+            font-size: 12px;
+            color: #444
+        }
+        
+        label {
+            font-size: 13px;
+            margin-right: 6px
+        }
+        
+        select,
+        input[type="number"] {
+            padding: 6px;
+            border-radius: 6px;
+            border: 1px solid #ccc
         }
     </style>
 </head>
 
 <body>
-
-    <h1>Canvas (Chart.js) Performance Test</h1>
+    <h1>Canvas (Chart.js) Performance Test — Visible Charts</h1>
 
     <div id="chart-container">
         <h2>Line Chart</h2>
         <canvas id="myChart" width="700" height="400"></canvas>
     </div>
 
+    <div id="controls">
+        <div style="display:flex;gap:10px;align-items:center;">
+            <label>Dataset size:</label>
+            <select id="dataset-size">
+        <option value="500">500</option>
+        <option value="1000" selected>1000</option>
+        <option value="2000">2000</option>
+      </select>
+
+            <label>Repeats:</label>
+            <select id="repeats">
+        <option value="3">3</option>
+        <option value="5" selected>5</option>
+        <option value="10">10</option>
+      </select>
+
+            <label>Visible Duration (ms):</label>
+            <input id="visible-duration" type="number" min="50" value="300" style="width:80px;">
+        </div>
+
+        <div>
+            <button id="start-btn">Start Tests</button>
+            <button id="download-btn" disabled>Download Results</button>
+        </div>
+    </div>
+
     <table>
         <thead>
             <tr>
-                <th>Rendering Tech</th>
-                <th>Test Type</th>
+                <th>Tech</th>
+                <th>Test</th>
                 <th>Bandwidth</th>
                 <th>Batch Size</th>
-                <th>Avg. Rendering Time (ms)</th>
-                <th>FPS</th>
-                <th>CPU (%)</th>
+                <th>Wall Time (ms)</th>
+                <th>Render Time (ms)</th>
+                <th>fpsProxy</th>
                 <th>Memory (MB)</th>
+                <th>Notes</th>
             </tr>
         </thead>
         <tbody id="metrics-body"></tbody>
     </table>
 
+    <p class="note">
+        Notes: "Wall Time" includes simulated network delay. "Render Time" measures script time to create/draw the chart. GPU/shader timing and real CPU% are not available in vanilla browser JS and are therefore not reported.
+    </p>
+
     <script>
+        /* ====== Configuration & helpers ====== */
         const bandwidthSimulation = {
             "Normal": 0,
             "Slow 3G": 100,
             "Fast 3G": 30
         };
-
-        const tests = [{
+        const testVariants = [{
             batch: 50,
-            type: "Baseline",
-            bw: "Normal"
-        }, {
-            batch: 50,
-            type: "Baseline",
-            bw: "Slow 3G"
-        }, {
-            batch: 50,
-            type: "Baseline",
-            bw: "Fast 3G"
+            label: "Baseline"
         }, {
             batch: 200,
-            type: "Optimized",
-            bw: "Normal"
-        }, {
-            batch: 200,
-            type: "Optimized",
-            bw: "Slow 3G"
-        }, {
-            batch: 200,
-            type: "Optimized",
-            bw: "Fast 3G"
+            label: "Optimized"
         }];
 
-        let currentTest = 0;
+        const datasetSizeSelect = document.getElementById('dataset-size');
+        const repeatsSelect = document.getElementById('repeats');
+        const visibleDurationInput = document.getElementById('visible-duration');
+        const startBtn = document.getElementById('start-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const metricsBody = document.getElementById('metrics-body');
+        const canvas = document.getElementById('myChart');
+        const ctx = canvas.getContext('2d');
+
         let chart = null;
+        let aggregatedResults = [];
 
-        function getMemoryMB() {
-            if (performance.memory) return (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
-            return "N/A";
-        }
-
-        function runNextTest() {
-            if (currentTest >= tests.length) return;
-
-            const test = tests[currentTest];
-            const canvas = document.getElementById('myChart');
-            const ctx = canvas.getContext('2d');
-
-            // Destroy previous chart
-            if (chart) chart.destroy();
-
-            // Generate random data
-            const N = test.batch;
+        function generateData(n) {
             const labels = Array.from({
-                length: N
+                length: n
             }, (_, i) => 'P' + i);
-            const data1 = Array.from({
-                length: N
-            }, () => Math.random() * 100);
-            const data2 = Array.from({
-                length: N
-            }, () => Math.random() * 100);
-
-            const delay = bandwidthSimulation[test.bw];
-            const startTime = performance.now();
-
-            setTimeout(() => {
-                chart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels,
-                        datasets: [{
-                            label: 'Dataset 1',
-                            data: data1,
-                            borderColor: 'rgba(54,162,235,1)',
-                            borderWidth: 1,
-                            pointRadius: 0
-                        }, {
-                            label: 'Dataset 2',
-                            data: data2,
-                            borderColor: 'rgba(255,99,132,1)',
-                            borderWidth: 1,
-                            pointRadius: 0
-                        }]
-                    },
-                    options: {
-                        responsive: false,
-                        animation: false
-                    }
-                });
-
-                const endTime = performance.now();
-                const renderTime = endTime - startTime;
-                const fps = (1000 / renderTime).toFixed(1);
-                const cpuPercent = (renderTime / renderTime * 100).toFixed(1); // placeholder
-                const memory = getMemoryMB();
-
-                const metricsBody = document.getElementById("metrics-body");
-                const row = document.createElement("tr");
-                row.innerHTML = `
-            <td>Canvas (Chart.js)</td>
-            <td>${test.type}</td>
-            <td>${test.bw}</td>
-            <td>${test.batch}</td>
-            <td>${renderTime.toFixed(2)}</td>
-            <td>${fps}</td>
-            <td>${cpuPercent}</td>
-            <td>${memory}</td>
-        `;
-                metricsBody.appendChild(row);
-
-                currentTest++;
-                runNextTest();
-            }, delay);
+            const d1 = labels.map(() => Math.random() * 100);
+            const d2 = labels.map(() => Math.random() * 100);
+            return {
+                labels,
+                d1,
+                d2
+            };
         }
 
-        window.onload = runNextTest;
-    </script>
+        function clearCanvas() {
+            if (chart) {
+                chart.destroy();
+                chart = null;
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
 
+        /* create chart and keep visible for a short time so user can see lines */
+        async function runSingleRun({
+            dataset,
+            batchSize,
+            bandwidthKey,
+            visibleDuration
+        }) {
+            const wallStart = performance.now();
+
+            // simulate network delay (user perceived)
+            await new Promise(res => setTimeout(res, bandwidthSimulation[bandwidthKey]));
+
+            const renderStart = performance.now();
+
+            // create chart with explicit visible colors
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dataset.labels,
+                    datasets: [{
+                        label: 'Dataset A',
+                        data: dataset.d1,
+                        borderColor: 'rgba(54,162,235,1)',
+                        backgroundColor: 'rgba(54,162,235,0.06)',
+                        borderWidth: 1.4,
+                        pointRadius: 0,
+                        tension: 0.12
+                    }, {
+                        label: 'Dataset B',
+                        data: dataset.d2,
+                        borderColor: 'rgba(255,99,132,1)',
+                        backgroundColor: 'rgba(255,99,132,0.05)',
+                        borderWidth: 1.2,
+                        pointRadius: 0,
+                        tension: 0.12
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    animation: false,
+                    plugins: {
+                        legend: {
+                            display: true
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true
+                        },
+                        y: {
+                            display: true
+                        }
+                    }
+                }
+            });
+
+            // ensure the paint completed by waiting one RAF
+            await new Promise(r => requestAnimationFrame(r));
+
+            const renderEnd = performance.now();
+            // keep chart visible for configured time so you can see it
+            await new Promise(r => setTimeout(r, visibleDuration));
+
+            const wallEnd = performance.now();
+
+            const renderTime = renderEnd - renderStart;
+            const wallTime = wallEnd - wallStart;
+            const fpsProxy = renderTime > 0 ? (1000 / renderTime) : NaN;
+
+            let memoryMB = "N/A";
+            if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+                memoryMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
+            }
+
+            return {
+                tech: "Canvas (Chart.js)",
+                testLabel: batchSize,
+                bandwidth: bandwidthKey,
+                batchSize,
+                wallTime: Number(wallTime.toFixed(2)),
+                renderTime: Number(renderTime.toFixed(2)),
+                fpsProxy: Number((fpsProxy).toFixed(1)),
+                memoryMB,
+                notes: `Visible ${visibleDuration}ms`
+            };
+        }
+
+        /* run each variant multiple times and average */
+        async function runTestVariant({
+            dataset,
+            batchSize,
+            bandwidthKey,
+            repeats,
+            visibleDuration
+        }) {
+            const runs = [];
+            for (let i = 0; i < repeats; i++) {
+                clearCanvas();
+                await new Promise(res => setTimeout(res, 180)); // small settle
+                const res = await runSingleRun({
+                    dataset,
+                    batchSize,
+                    bandwidthKey,
+                    visibleDuration
+                });
+                runs.push(res);
+                clearCanvas();
+                await new Promise(res => setTimeout(res, 120));
+            }
+
+            const n = runs.length;
+            const sum = (k) => runs.reduce((s, r) => s + Number(r[k]), 0);
+            const avg = {
+                tech: runs[0].tech,
+                testLabel: runs[0].testLabel,
+                bandwidth: runs[0].bandwidth,
+                batchSize: runs[0].batchSize,
+                wallTime: Number((sum('wallTime') / n).toFixed(2)),
+                renderTime: Number((sum('renderTime') / n).toFixed(2)),
+                fpsProxy: Number((sum('fpsProxy') / n).toFixed(1)),
+                memoryMB: runs.every(r => r.memoryMB !== "N/A") ? Number((sum('memoryMB') / n).toFixed(2)) : "N/A",
+                notes: runs[0].notes,
+                rawRuns: runs
+            };
+            return avg;
+        }
+
+        function appendRow(agg) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+    <td>${agg.tech}</td>
+    <td>${agg.testLabel}</td>
+    <td>${agg.bandwidth}</td>
+    <td>${agg.batchSize}</td>
+    <td>${agg.wallTime}</td>
+    <td>${agg.renderTime}</td>
+    <td>${agg.fpsProxy}</td>
+    <td>${agg.memoryMB}</td>
+    <td>${agg.notes}</td>
+  `;
+            metricsBody.appendChild(tr);
+        }
+
+        /* Main runner */
+        startBtn.addEventListener('click', async() => {
+            startBtn.disabled = true;
+            downloadBtn.disabled = true;
+            metricsBody.innerHTML = '';
+            aggregatedResults = [];
+
+            const datasetSize = Number(datasetSizeSelect.value);
+            const repeats = Number(repeatsSelect.value);
+            const visibleDuration = Number(visibleDurationInput.value);
+
+            const dataset = generateData(datasetSize);
+
+            const bwKeys = Object.keys(bandwidthSimulation);
+            for (const variant of testVariants) {
+                for (const bw of bwKeys) {
+                    const agg = await runTestVariant({
+                        dataset,
+                        batchSize: variant.batch,
+                        bandwidthKey: bw,
+                        repeats,
+                        visibleDuration
+                    });
+                    aggregatedResults.push(agg);
+                    appendRow(agg);
+                    // small pause to avoid heat/GC bias
+                    await new Promise(r => setTimeout(r, 450));
+                }
+            }
+
+            downloadBtn.disabled = false;
+            startBtn.disabled = false;
+            startBtn.results = aggregatedResults;
+            console.log('results', aggregatedResults);
+        });
+
+        /* Download aggregated JSON */
+        downloadBtn.addEventListener('click', () => {
+            if (!startBtn.results) return;
+            const blob = new Blob([JSON.stringify(startBtn.results, null, 2)], {
+                type: 'application/json'
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'chartjs-visible-results.json';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        });
+    </script>
 </body>
 
 </html>
